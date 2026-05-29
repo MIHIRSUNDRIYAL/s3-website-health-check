@@ -6,8 +6,6 @@ from urllib.parse import urljoin
 import requests
 
 
-WEBSITE_URL = "http://your-s3-website-endpoint-here"
-
 ASSETS_TO_CHECK = [
     "",
     "index.html",
@@ -64,12 +62,18 @@ def write_log(results):
 
 
 def main():
-    print("Running S3 static website health check...\n")
+    website_url = input("Enter your S3 static website endpoint: ").strip()
+
+    if not website_url:
+        print("No website URL entered. Please run the script again with a valid S3 website endpoint.")
+        sys.exit(1)
+
+    print("\nRunning S3 static website health check...\n")
 
     results = []
 
     for asset in ASSETS_TO_CHECK:
-        full_url = urljoin(WEBSITE_URL.rstrip("/") + "/", asset)
+        full_url = urljoin(website_url.rstrip("/") + "/", asset)
         result = check_url(full_url)
         results.append(result)
 
