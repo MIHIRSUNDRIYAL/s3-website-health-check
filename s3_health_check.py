@@ -1,16 +1,11 @@
 import csv
+import re
 import sys
 from datetime import datetime
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 
-
-ASSETS_TO_CHECK = [
-    "",
-    "index.html",
-    "style.css"
-]
 
 LOG_FILE = "health_check_log.csv"
 
@@ -23,7 +18,8 @@ def check_url(url):
             "url": url,
             "status_code": response.status_code,
             "success": 200 <= response.status_code < 400,
-            "error": ""
+            "error": "",
+            "content": response.text if "text/html" in response.headers.get("Content-Type", "") else ""
         }
 
     except requests.RequestException as error:
@@ -31,8 +27,34 @@ def check_url(url):
             "url": url,
             "status_code": "N/A",
             "success": False,
-            "error": str(error)
+            "error": str(error),
+            "content": ""
         }
+
+
+def extract_assets(html_content, base_url):
+    patterns = [
+        r'href=["\']([^"\']+)["\']',
+        r'src=["\']([^"\']+)["\']'
+    ]
+
+    found_assets = []
+
+    for pattern in patterns:
+        matches = re.findall(pattern, html_content)
+
+        for match in matches:
+            if match.startswith(("mailto:", "tel:", "#", "javascript:")):
+                continue
+
+            full_url = urljoin(base_url, match)
+            found_assets.append(full_url)
+
+    return sorted(set(found_assets))
+
+
+def is_same_site(url, website_url):
+    return urlparse(url).netloc == urlparse(website_url).netloc
 
 
 def write_log(results):
@@ -65,20 +87,44 @@ def main():
     website_url = input("Enter your S3 static website endpoint: ").strip()
 
     if not website_url:
-        print("No website URL entered. Please run the script again with a valid S3 website endpoint.")
+        print("No website URL entered.")
         sys.exit(1)
+
+    if not website_url.startswith(("http://", "https://")):
+        website_url = "http://" + website_url
 
     print("\nRunning S3 static website health check...\n")
 
     results = []
 
-    for asset in ASSETS_TO_CHECK:
-        full_url = urljoin(website_url.rstrip("/") + "/", asset)
-        result = check_url(full_url)
+    homepage_result = check_url(website_url)
+    results.append(homepage_result)
+
+    homepage_status = "PASS" if homepage_result["success"] else "FAIL"
+    print(f"{homepage_status} | {homepage_result['status_code']} | {website_url}")
+
+    if not homepage_result["success"]:
+        write_log(results)
+        print(f"\nResults logged to {LOG_FILE}")
+        print("Homepage failed. Fix the S3 website endpoint or permissions first.")
+        sys.exit(1)
+
+    assets = extract_assets(homepage_result["content"], website_url)
+
+    same_site_assets = [
+        asset for asset in assets
+        if is_same_site(asset, website_url)
+    ]
+
+    if not same_site_assets:
+        print("\nNo same-site assets found in homepage HTML.")
+
+    for asset_url in same_site_assets:
+        result = check_url(asset_url)
         results.append(result)
 
         status = "PASS" if result["success"] else "FAIL"
-        print(f"{status} | {result['status_code']} | {full_url}")
+        print(f"{status} | {result['status_code']} | {asset_url}")
 
         if result["error"]:
             print(f"Error: {result['error']}")
@@ -93,7 +139,7 @@ def main():
         print(f"Health check failed: {len(failed_checks)} issue(s) found.")
         sys.exit(1)
 
-    print("Health check passed: all checks successful.")
+    print("Health check passed: homepage and discovered assets loaded successfully.")
     sys.exit(0)
 
 
